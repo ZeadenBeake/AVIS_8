@@ -69,20 +69,43 @@ if f then
     f:close()
 end
 
--- Simple assembler for your CPU
 local function assemble(source_code)
     local lines = {}
     local labels = {}
+    local aliases = {}
     local address = 0
+
+    -- Preprocessing step, perform substitution for aliases
+    for line in source_code:gmatch("[^\r\n]+") do
+        if line:match("^@") then
+            print("Found alias!")
+            print(line)
+            line = line:sub(2, -1)
+            line:match("^(%S+)%s*(.*)$")
+            local from, to = line:match("^(%S+)%s*(.*)$")
+            aliases[from] = to
+            print(from, to)
+        end
+    end
     
     -- First pass: parse lines and collect labels
     for line in source_code:gmatch("[^\r\n]+") do
         line = line:match("^%s*(.-)%s*$")  -- trim whitespace
         
-        -- Skip empty lines and comments
-        if line == "" or line:match("^;") then
+        -- Skip empty lines, comments and already handled aliases.
+        if line == "" or line:match("^;") or line:match("^@") then
             goto continue
         end
+
+        local subs = {}
+        for word in line:gmatch("%S+") do
+            if aliases[word] then
+                subs[#subs+1] = aliases[word]
+            else
+                subs[#subs+1] = word
+            end
+        end
+        line = table.concat(subs, " ")
         
         -- Check for label (ends with :)
         local label = line:match("^(%w+):%s*$")
@@ -110,10 +133,10 @@ local function assemble(source_code)
     local bytecode = {}
     for i = 0, 255 do bytecode[i] = 0 end  -- initialize memory
     
-    for _, line in ipairs(lines) do
+    for i, line in ipairs(lines) do
         local opcode = bytes[line.instruction]
         if not opcode then
-            error("Unknown instruction: " .. line.instruction .. " at address " .. line.address)
+            error("Unknown instruction: " .. line.instruction .. " at address " .. line.address .. " line " .. i)
         end
         
         -- Parse operand
