@@ -62,7 +62,10 @@ make("DEBG") -- Manually trigger a debug output.
 print("Making bytecodes...")
 bytes = reverse(codes)
 
-local f = io.open("program.avis", "r")
+print("What file (Do not include .avis extension)? ")
+local file = io.read()
+if file == "" then file = "program" end
+local f = io.open(file .. ".avis", "r")
 local program
 if f then
     program = f:read("a")
@@ -185,9 +188,8 @@ STOP
 --]]
 
 local bytecode = assemble(program)
-local outFile = io.open("program.bin", "wb")
 -- Load into memory
-local file = io.open("program.bin", "wb")  -- "wb" = write binary
+local file = io.open(file .. ".bin", "wb")  -- "wb" = write binary
 if not file then
     error("Could not open program.bin!")
 end

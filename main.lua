@@ -266,7 +266,9 @@ memory[12] = bytes["JMPL"]
 memory[13] = 4
 memory[255] = bytes["STOP"]
 --]]
-local loaded = load_bytecode("program.bin")
+print("Specify binary:")
+local programName = io.read()
+local loaded = load_bytecode(programName)
 for addr, byte in pairs(loaded) do
     memory[addr] = byte
 end
