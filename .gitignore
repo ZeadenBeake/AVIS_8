@@ -1,4 +1,2 @@
-/program.avis
-/program.bin
-/stackTest.avis
-/test.avis
+*.avis
+*.bin
