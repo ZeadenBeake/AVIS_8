@@ -30,8 +30,10 @@ make("PSHR") -- Push register to queue
 make("POPR") -- Pop queue to register
 make("ROTT") -- Rotate queue (pop to top)
 makeR("SET") -- Set (A-D) to literal
+make("SETS")
 makeR("COP") -- Copy register to (A-D)
 make("COPN") -- Copy N to register (effectively clearing it)
+make("COPS")
 makeR("ADL") -- Add literal to (A-D)
 makeR("ADR") -- Add register to (A-D)
 makeR("SBL") -- Subtract literal from (A-D)
@@ -72,19 +74,45 @@ if f then
     f:close()
 end
 
+local debug = {
+    predump = true
+}
+
 local function assemble(source_code)
     local lines = {}
     local labels = {}
     local aliases = {}
+    local files = {}
     local address = 0
+    local source_line = 0
 
-    -- Preprocessing step, perform substitution for aliases
+    for line in source_code:gmatch("[^\r\n]+") do
+        if line:match("^%.") then
+            local _, filename = line:match("^(%S+)%s*(.*)$")
+            print(filename)
+            print(files[filename] or false)
+            if not files[filename] then
+                local subfile = io.open(filename, "r")
+                if not subfile then
+                    error("Library file not found: " .. filename)
+                end
+                files[filename] = true
+                local subdata = subfile:read("a")
+                print(subdata)
+                print("----------------------")
+                source_code = subdata .. "\n" .. source_code
+                print(source_code)
+            end
+            print(files[filename] or false)
+        end
+    end
+
+    -- Preproccessing step two, handle aliases
     for line in source_code:gmatch("[^\r\n]+") do
         if line:match("^@") then
             print("Found alias!")
             print(line)
             line = line:sub(2, -1)
-            line:match("^(%S+)%s*(.*)$")
             local from, to = line:match("^(%S+)%s*(.*)$")
             aliases[from] = to
             print(from, to)
@@ -97,6 +125,7 @@ local function assemble(source_code)
         
         -- Skip empty lines, comments and already handled aliases.
         if line == "" or line:match("^;") or line:match("^@") then
+            source_line = source_line + 1
             goto continue
         end
 
@@ -114,12 +143,14 @@ local function assemble(source_code)
         local label = line:match("^(%w+):%s*$")
         if label then
             labels[label] = address
+            source_line = source_line + 1
             goto continue
         end
         
         -- Parse instruction and operand
         local instruction, operand = line:match("^(%w+)%s*(.*)$")
         if instruction then
+            source_line = source_line + 1
             table.insert(lines, {
                 address = address,
                 instruction = instruction,
@@ -131,15 +162,34 @@ local function assemble(source_code)
         
         ::continue::
     end
+
+    if debug.predump then
+        local predump = io.open(file .. ".predump", "w")
+        if not predump then
+            error("Could not open predump file")
+        end
+
+        for i = 0, 255 do
+            predump:write(program)
+        end
+    end
     
     -- Second pass: resolve labels and generate bytecode
     local bytecode = {}
     for i = 0, 255 do bytecode[i] = 0 end  -- initialize memory
     
-    for i, line in ipairs(lines) do
+    local offset = 0
+    for _, line in ipairs(lines) do
         local opcode = bytes[line.instruction]
+        if line.instruction:match("JMPL") and labels[line.operand] then
+            bytecode[line.address + offset] = bytes["SETS"]
+            bytecode[line.address + 1 + offset] = math.floor((labels[line.operand] + offset) / 256)
+            offset = offset + 2
+            bytecode[line.address + offset] = bytes["JUMPL"]
+            bytecode[line.address + 1 + offset] = (labels[line.operand] + offset) % 256
+        end
         if not opcode then
-            error("Unknown instruction: " .. line.instruction .. " at address " .. line.address .. " line " .. i)
+            error("Unknown instruction: " .. line.instruction .. " at address " .. line.address .. " line " .. source_line)
         end
         
         -- Parse operand
@@ -147,7 +197,7 @@ local function assemble(source_code)
         if line.operand ~= "" then
             -- Check if it's a label
             if labels[line.operand] then
-                operand_value = labels[line.operand]
+                operand_value = (labels[line.operand] + offset) % 256
             -- Check if it's a register reference
             elseif line.operand == "A" then operand_value = 0
             elseif line.operand == "B" then operand_value = 1
@@ -160,8 +210,9 @@ local function assemble(source_code)
             end
         end
         
-        bytecode[line.address] = opcode or 0
-        bytecode[line.address + 1] = operand_value or 0
+        bytecode[line.address + offset] = opcode or 0
+        bytecode[line.address + 1 + offset] = operand_value or 0
+        ::cont::
     end
     
     return bytecode
@@ -189,15 +240,16 @@ STOP
 
 local bytecode = assemble(program)
 -- Load into memory
-local file = io.open(file .. ".bin", "wb")  -- "wb" = write binary
-if not file then
+local outfile = io.open(file .. ".bin", "wb")  -- "wb" = write binary
+if not outfile then
     error("Could not open program.bin!")
 end
 
 -- Write all 256 bytes
-for i = 0, 255 do
-    file:write(string.char(bytecode[i] or 0))
+for i = 0, #bytecode do
+    print(bytecode[i])
+    outfile:write(string.char(bytecode[i] or 0))
 end
 
-file:close()
+outfile:close()
 print("Bytecode saved!")

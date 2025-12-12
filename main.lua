@@ -9,10 +9,14 @@ local next = 1 -- Just a little helper variable for building the list of opcodes
 print("Creating virtual storage...")
 local queue = {head=1,tail=1,size=0}
 for i = 1, QUEUE_SIZE do queue[i] = 0 end
-local registers = {A = 0, B = 0, C = 0, D = 0, N = 0}
+local registers = {A = 0, B = 0, C = 0, D = 0, N = 0, S = 0}
 local memory = {}
-for i = 1, MEM_SIZE do memory[i] = 0 end
+for i = 0, 255 do
+    memory[i] = {}
+    for j = 1, MEM_SIZE do memory[i][j] = 0 end
+end
 local counter = 0
+local page = 0
 
 local function clampWithRollover8b(a)
     if a > 255 then
@@ -51,6 +55,7 @@ local function getRegister(operand)
     elseif operand == 1 then return 'B'
     elseif operand == 2 then return 'C'
     elseif operand == 3 then return 'D'
+    elseif operand == 5 then return 'S'
     else return 'N' end
 end
 
@@ -99,8 +104,10 @@ make("PSHR") -- Push register to queue
 make("POPR") -- Pop queue to register
 make("ROTT") -- Rotate queue (pop to top)
 makeR("SET") -- Set (A-D) to literal
+make("SETS")
 makeR("COP") -- Copy register to (A-D)
 make("COPN") -- Copy N to register (effectively clearing it)
+make("COPS")
 makeR("ADL") -- Add literal to (A-D)
 makeR("ADR") -- Add register to (A-D)
 makeR("SBL") -- Subtract literal from (A-D)
@@ -136,10 +143,12 @@ local instructions = {}
 -- NOOP and STOP are being implimented in the core loop.
 do
     instructions["JMPL"] = function(op)
+        page = registers["S"]
         counter = op - 2
     end
 
     instructions["JMPR"] = function(op)
+        page = registers["S"]
         counter = registers[getRegister(op)] - 2
     end
 
@@ -171,6 +180,17 @@ do
             table.insert(queue, table.remove(queue, 1))
         end
     end
+
+    instructions["SETS"] = defFuncLit("S",
+        function (a, b)
+            return b
+        end
+    )
+    instructions["COPS"] = defFuncReg("S",
+        function (a, b)
+            return b
+        end
+    )
 
     local registryNames = {"A", "B", "C", "D"}
     for i, reg in ipairs(registryNames) do
@@ -227,6 +247,7 @@ do
         instructions["JZL" .. reg] = defFuncLit(reg,
             function (a, b)
                 if a == 0 then
+                    page = registers["S"]
                     counter = b - 2
                 end
             end
@@ -234,6 +255,7 @@ do
         instructions["JZR" .. reg] = defFuncReg(reg,
             function (a, b)
                 if a == 0 then
+                    page = registers["S"]
                     counter = b - 2
                 end
             end
@@ -250,37 +272,43 @@ print(#codes .. " total codes.")
 
 print("Loading program...")
 --[[ Basic behavior test
-memory[0] = bytes["SETA"]
-memory[1] = 0
-memory[2] = bytes["SETB"]
-memory[3] = 5
-memory[4] = bytes["COPC"]
-memory[5] = 1
-memory[6] = bytes["SBLC"]
-memory[7] = 5
-memory[8] = bytes["JZLC"]
-memory[9] = 255 -- Stop once we're at five.
-memory[10] = bytes["ADLA"]
-memory[11] = 1
-memory[12] = bytes["JMPL"]
-memory[13] = 4
-memory[255] = bytes["STOP"]
+memory[1][0] = bytes["SETA"]
+memory[1][1] = 0
+memory[1][2] = bytes["SETB"]
+memory[1][3] = 5
+memory[1][4] = bytes["COPC"]
+memory[1][5] = 1
+memory[1][6] = bytes["SBLC"]
+memory[1][7] = 5
+memory[1][8] = bytes["JZLC"]
+memory[1][9] = 255 -- Stop once we're at five.
+memory[1][10] = bytes["ADLA"]
+memory[1][11] = 1
+memory[1][12] = bytes["JMPL"]
+memory[1][13] = 4
+memory[1][255] = bytes["STOP"]
 --]]
 print("Specify binary:")
 local programName = io.read()
 local loaded = load_bytecode(programName)
+
+print("Initializing memory...")
 for addr, byte in pairs(loaded) do
-    memory[addr] = byte
+    local saveAddress = addr % 256
+    local savePage = math.floor(addr / 256)
+    if not memory[savePage] then memory[savePage] = {} end
+    memory[savePage][saveAddress] = byte
 end
 
 local function debug(opcode, operand)
     print("Debug log:")
     print("-------------------------------")
     print("| REGISTERS: | MISC:          |")
-    print(string.format("| %-10s |", ("A: " .. registers.A)) .. string.format(" COUNTER:  %03d  |", counter))
-    print(string.format("| %-10s |", ("B: " .. registers.B)) .. string.format(" BYTECODE: %03d  |", opcode))
-    print(string.format("| %-10s |", ("C: " .. registers.C)) .. string.format(" OPCODE:   %s |", codes[opcode]))
-    print(string.format("| %-10s |", ("D: " .. registers.D)) .. string.format(" OPERAND:  %03d  |", operand))
+    print(string.format("| %-10s |", ("A: " .. registers.A)) .. string.format(" PAGE:  %03d     |", page))
+    print(string.format("| %-10s |", ("B: " .. registers.B)) .. string.format(" COUNTER:  %03d  |", counter))
+    print(string.format("| %-10s |", ("C: " .. registers.C)) .. string.format(" BYTECODE: %03d  |", opcode))
+    print(string.format("| %-10s |", ("D: " .. registers.D)) .. string.format(" OPCODE:   %s |", codes[opcode]))
+    print(string.format("| %-10s |", ("S: " .. registers.S)) .. string.format(" OPERAND:  %03d  |", operand))
     print("-------------------------------------------------------------------------")
     print("|                                MEMORY:                                |")
     print("-------------------------------------------------------------------------")
@@ -288,9 +316,9 @@ local function debug(opcode, operand)
     local block_count = 0
     for i = 1, MEM_SIZE do
         if (i % 32) == 0 then
-            memstring = memstring .. memory[i-1]
+            memstring = memstring .. memory[page][i-1]
         else
-            memstring = memstring .. memory[i-1] .. "-"
+            memstring = memstring .. memory[page][i-1] .. "-"
         end
         
         if (i % 32) == 0 then
@@ -313,13 +341,14 @@ end
 print("Init complete! Running CPU.")
 local dbg = {
     step = true,
+    stepPause = true,
     stop = true,
     slow = false
 }
 local running = true
 while running do
-    local opcode = memory[counter]
-    local operand = memory[counter + 1]
+    local opcode = memory[page][counter]
+    local operand = memory[page][counter + 1]
 
     if codes[opcode] == "NOOP" then
         -- Nothin'...
@@ -333,10 +362,17 @@ while running do
         error("FATAL:\nCPU was given an invalid instruction!\nINST: " .. opcode .. "\nCOUNTER: " .. counter)
     end
 
-    if dbg.step then debug(opcode, operand) end
-    if dbg.slow then os.execute("sleep " .. 0.25) end
+    if dbg.step then 
+        debug(opcode, operand)
+        if dbg.stepPause then local _ = io.read() end
+    end
+    if dbg.slow then os.execute("sleep " .. 0.125) end
 
-    counter = clampWithRollover8b(counter + 2)
+    counter = counter + 2
+    if counter > 255 then
+        counter = 0
+        page = page + 1
+    end
     registers.N = 0
 end
 print("Execution complete!")
